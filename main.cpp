@@ -1,4 +1,4 @@
-#include "VariableAnalyzer.h"
+#include "PreExecuteAnalyzer.h"
 #include "FunctionAnalyzer.h"
 
 #include <clang/Tooling/Tooling.h>
@@ -40,9 +40,15 @@ int main(int argc, const char **argv) {
 
     if (Mode == Variables) {
         Data variables;
-        Factory f(variables);
+        std::vector<std::string> strings;
+        bool canTest;
+        Factory f(variables, strings, canTest);
         Tool.run(&f);
-        result = {{"variables", variables}};
+        result = {
+            {"cat_test", canTest},
+            {"variables", variables},
+            {"strings", strings},
+        };
     } else {
         FunctionData functions;
         FunctionFactory f(functions);

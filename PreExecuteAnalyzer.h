@@ -38,11 +38,26 @@ public:
     explicit VariableVisitor(ASTContext &Context, SourceManager &SM, Data &data)
         : Context(Context), SM(SM), _data(data) {}
 
+    bool shouldVisitTemplateInstantiations() const { return false; }
+    bool shouldVisitImplicitCode() const { return false; }
+
+    bool shouldVisitDecl(Decl *D) {
+        return SM.isWrittenInMainFile(D->getLocation());
+    }
+
+    bool TraverseCallExpr(CallExpr *CE) {
+        if (!SM.isWrittenInMainFile(CE->getBeginLoc())) {
+            return true;
+        }
+        return RecursiveASTVisitor<VariableVisitor>::TraverseCallExpr(CE);
+    }
+
     bool VisitCallExpr(CallExpr *CE) {
+        if (!SM.isWrittenInMainFile(CE->getBeginLoc())) {
+            return true;
+        }
+
         if (FunctionDecl *FD = CE->getDirectCallee()) {
-            if (isInSystemHeader(FD->getLocation())) {
-                return true;
-            }
             if (FD->getIdentifier() && FD->getName() == "scanf") {
                 processScanfArguments(CE);
             }
@@ -50,10 +65,18 @@ public:
         return true;
     }
 
-    bool VisitCXXOperatorCallExpr(CXXOperatorCallExpr *OCE) {
-        if (isInSystemHeader(OCE->getBeginLoc())) {
+    bool TraverseCXXOperatorCallExpr(CXXOperatorCallExpr *OCE) {
+        if (!SM.isWrittenInMainFile(OCE->getBeginLoc())) {
             return true;
         }
+        return RecursiveASTVisitor<VariableVisitor>::TraverseCXXOperatorCallExpr(OCE);
+    }
+
+    bool VisitCXXOperatorCallExpr(CXXOperatorCallExpr *OCE) {
+        if (!SM.isWrittenInMainFile(OCE->getBeginLoc())) {
+            return true;
+        }
+
         if (OCE->getOperator() == OO_GreaterGreater) {
             processCinOperator(OCE);
         }
@@ -64,30 +87,6 @@ private:
     ASTContext &Context;
     SourceManager &SM;
     Data &_data;
-
-    bool isInSystemHeader(SourceLocation loc) const {
-        if (loc.isInvalid()) return false;
-        
-        if (SM.isInSystemHeader(loc) || SM.isInSystemMacro(loc)) {
-            return true;
-        }
-        
-        if (SM.isInMainFile(loc)) {
-            return false;
-        }
-        
-        FileID FID = SM.getFileID(loc);
-        if (FID.isInvalid()) return false;
-        
-        SourceLocation IncludeLoc = SM.getIncludeLoc(FID);
-        if (IncludeLoc.isInvalid()) return false;
-        
-        if (!SM.isWrittenInMainFile(IncludeLoc)) {
-            return true;
-        }
-        
-        return false;
-    }
 
     void processScanfArguments(CallExpr *CE) {
         SourceLocation CallLoc = CE->getBeginLoc();
@@ -114,12 +113,17 @@ private:
     }
 
     bool refersToCin(Expr *E) {
+        static llvm::SmallPtrSet<VarDecl*, 4> cinDecls;
+        
         E = E->IgnoreParenCasts();
         if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E)) {
             if (VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-                return VD->getIdentifier() && 
-                       VD->getName() == "cin" &&
-                       VD->isInStdNamespace();
+                if (cinDecls.count(VD)) return true;
+                bool isCin = VD->getIdentifier() && 
+                            VD->getName() == "cin" &&
+                            VD->isInStdNamespace();
+                if (isCin) cinDecls.insert(VD);
+                return isCin;
             }
         } else if (CXXOperatorCallExpr *OCE = dyn_cast<CXXOperatorCallExpr>(E)) {
             if (OCE->getOperator() == OO_GreaterGreater) {
@@ -130,32 +134,68 @@ private:
     }
 
     void addVariable(Expr *E, SourceLocation Loc) {
-        if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenCasts())) {
+        static llvm::DenseMap<VarDecl*, std::pair<std::string, std::string>> cache;
+        
+        E = E->IgnoreParenCasts();
+        if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E)) {
             if (VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
                 if (!VD->getIdentifier() || VD->getName().empty()) return;
-
+                
+                auto it = cache.find(VD);
+                if (it != cache.end()) {
+                    PresumedLoc PLoc = SM.getPresumedLoc(Loc);
+                    _data.push_back({it->second.first, it->second.second, 
+                                    {PLoc.getLine(), PLoc.getColumn()}});
+                    return;
+                }
+                
                 QualType QT = VD->getType().getUnqualifiedType();
                 PrintingPolicy PP(Context.getLangOpts());
                 std::string TypeStr = QT.getAsString(PP);
+                std::string Name = VD->getName().str();
+                
+                cache[VD] = {TypeStr, Name};
+                
                 PresumedLoc PLoc = SM.getPresumedLoc(Loc);
-
-                _data.push_back({TypeStr, VD->getName().str(), {PLoc.getLine(), PLoc.getColumn()}});
+                _data.push_back({TypeStr, Name, {PLoc.getLine(), PLoc.getColumn()}});
             }
         }
     }
 };
-
+    
 class TestVisitor : public RecursiveASTVisitor<TestVisitor> {
 public:
     explicit TestVisitor(ASTContext &Context, SourceManager &SM, std::vector<std::string> &strings, bool& canTest)
         : Context(Context), SM(SM), strings(strings), _canTest(canTest) {}
 
+    bool shouldVisitTemplateInstantiations() const { return false; }
+    bool shouldVisitImplicitCode() const { return false; }
+
+    bool shouldVisitDecl(Decl *D) {
+        return SM.isWrittenInMainFile(D->getLocation());
+    }
+
+    bool TraverseFunctionDecl(FunctionDecl *FD) {
+        bool wasInMain = currentFunctionIsMain;
+        if (FD->getNameAsString() == "main") {
+            currentFunctionIsMain = true;
+        }
+        
+        bool result = RecursiveASTVisitor<TestVisitor>::TraverseFunctionDecl(FD);
+        
+        currentFunctionIsMain = wasInMain;
+        return result;
+    }
+
     bool VisitFunctionDecl(FunctionDecl *FD) {
         if (isInSystemHeader(FD->getLocation())) {
             return true;
         }
+        
         if (FD->getNameInfo().getName().getAsString() == "main") {
-            hasMain = true;
+            currentFunctionIsMain = true;
+        } else {
+            currentFunctionIsMain = false;
         }
         return true;
     }
@@ -164,14 +204,14 @@ public:
         if (isInSystemHeader(VD->getLocation())) {
             return true;
         }
-        if (!hasMain) return true;
+        if (!currentFunctionIsMain) return true;
 
         std::string typeName = VD->getType().getAsString();
 
-        if (typeName.find("TestOptions") != std::string::npos  || typeName.find("FunctionManager") != std::string::npos || 
-            typeName.find("DataManager") != std::string::npos || typeName.find("TestFunctions") != std::string::npos) {
-            requiredObjectsFound++;
-        }
+        if (typeName.find("TestOptions") != std::string::npos) requiredTestOptionsFound = true; 
+        else if (typeName.find("FunctionManager") != std::string::npos) requiredFunctionManagerFound = true;
+        else if (typeName.find("DataManager") != std::string::npos) requiredDataManagerFound = true;
+        else if (typeName.find("TestFunctions") != std::string::npos) requiredTestFunctionsFound = true;
         return true;
     }
 
@@ -179,13 +219,13 @@ public:
         if (isInSystemHeader(CE->getExprLoc())) {
             return true;
         }
-        if (!hasMain || requiredObjectsFound < 4) return true;
+        if (!currentFunctionIsMain || !canTest()) return true;
+        
         if (CE->getMethodDecl()->getNameAsString() == "run") {
             Expr *base = CE->getImplicitObjectArgument()->IgnoreParenImpCasts();
             if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(base)) {
-                if (DRE->getType().getAsString().find("TestFunctions") != std::string::npos ) {
+                if (DRE->getType().getAsString().find("TestFunctions") != std::string::npos) {
                     _canTest = true;
-                    llvm::outs() << "Found all required objects and TestFunctions::run() call in main()\n";
                 }
             }
         }
@@ -196,9 +236,13 @@ public:
         if (isInSystemHeader(CE->getExprLoc())) {
             return true;
         }
+        if (!currentFunctionIsMain) return true;
+
         std::string className = CE->getConstructor()->getParent()->getNameAsString();
-        if (className.find("DataImage") != std::string::npos || className.find("DataArray") != std::string::npos || 
-            className.find("DataMatrix") != std::string::npos || className.find("DataText") != std::string::npos) {
+        if (className.find("DataImage") != std::string::npos || 
+            className.find("DataArray") != std::string::npos || 
+            className.find("DataMatrix") != std::string::npos || 
+            className.find("DataText") != std::string::npos) {
             if (CE->getNumArgs() > 0) {
                 Expr *firstArg = CE->getArg(0)->IgnoreParenImpCasts();
                 std::string strValue = getStringValue(firstArg);
@@ -214,63 +258,56 @@ private:
     ASTContext &Context;
     SourceManager &SM;
     std::vector<std::string> &strings;
-    bool hasMain = false;
-    int requiredObjectsFound = 0;
+    bool currentFunctionIsMain = false;
+    bool requiredDataManagerFound = false;
+    bool requiredFunctionManagerFound = false;
+    bool requiredTestOptionsFound = false;
+    bool requiredTestFunctionsFound = false;
     bool& _canTest;
 
-    bool isInSystemHeader(SourceLocation loc) const {
-        if (loc.isInvalid()) return false;
-        
-        if (SM.isInSystemHeader(loc) || SM.isInSystemMacro(loc)) {
+    bool canTest() {
+        if (requiredDataManagerFound 
+            && requiredFunctionManagerFound 
+            && requiredTestOptionsFound 
+            && requiredTestFunctionsFound) {
             return true;
         }
-        
-        if (SM.isInMainFile(loc)) {
-            return false;
-        }
-        
-        FileID FID = SM.getFileID(loc);
-        if (FID.isInvalid()) return false;
-        
-        SourceLocation IncludeLoc = SM.getIncludeLoc(FID);
-        if (IncludeLoc.isInvalid()) return false;
-        
-        if (!SM.isWrittenInMainFile(IncludeLoc)) {
-            return true;
-        }
-        
         return false;
     }
 
+    bool isInSystemHeader(SourceLocation loc) const {
+        return loc.isInvalid() || SM.isInSystemHeader(loc) || SM.isInSystemMacro(loc);
+    }
+
     std::string getStringValue(Expr *E) {
-        if (auto *SL = dyn_cast<StringLiteral>(E->IgnoreParenImpCasts())) {
+        E = E->IgnoreParenImpCasts();
+        
+        if (auto *SL = dyn_cast<StringLiteral>(E)) {
             return SL->getString().str();
         }
         
-        E = E->IgnoreParenImpCasts();
-
-        if (auto *FCE = dyn_cast<CXXFunctionalCastExpr>(E)){
+        if (auto *DRE = dyn_cast<DeclRefExpr>(E)) {
+            if (VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+                return VD->hasInit() ? getStringValue(VD->getInit()) : "";
+            }
+        }
+        
+        if (auto *FCE = dyn_cast<CXXFunctionalCastExpr>(E)) {
             return getStringValue(FCE->getSubExpr());
         }
 
         if (auto *CBT = dyn_cast<CXXBindTemporaryExpr>(E)) {
             return getStringValue(CBT->getSubExpr());
         }
-        if (auto *CE = dyn_cast<CXXConstructExpr>(E)){
-                
-            if (CE->getConstructor()->getParent()->getNameAsString() == "basic_string" && CE->getNumArgs() > 0) {
+        
+        if (auto *CE = dyn_cast<CXXConstructExpr>(E)) {
+            if (CE->getConstructor()->getParent()->getNameAsString() == "basic_string" && 
+                CE->getNumArgs() > 0) {
                 return getStringValue(CE->getArg(0));
             }
         }
-        if (auto *DRE = dyn_cast<DeclRefExpr>(E->IgnoreParenImpCasts())) {
-            if (VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
-                if (VD->hasInit()) {
-                    return getStringValue(VD->getInit());
-                }
-            }
-        }
         
-        if (auto *ILE = dyn_cast<InitListExpr>(E->IgnoreParenImpCasts())) {
+        if (auto *ILE = dyn_cast<InitListExpr>(E)) {
             std::string result;
             for (unsigned i = 0; i < ILE->getNumInits(); ++i) {
                 if (auto charVal = dyn_cast<CharacterLiteral>(ILE->getInit(i))) {

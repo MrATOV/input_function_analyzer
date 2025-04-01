@@ -7,8 +7,10 @@
 #include <clang/Frontend/FrontendAction.h>
 #include <clang/Tooling/Tooling.h>
 #include <memory>
+#include <regex>
 #include <utility>
 #include <vector>
+#include <string>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -145,6 +147,48 @@ private:
     std::string determineFunctionType(std::vector<std::pair<std::string, std::string>>& parameters) {
         std::vector<std::string> types;
 
+        if (parameters.size() >= 8) {
+            std::string params[8] = {
+                parameters[0].first,
+                parameters[1].first,
+                parameters[2].first,
+                parameters[3].first,
+                parameters[4].first,
+                parameters[5].first,
+                parameters[6].first,
+                parameters[7].first,
+            };
+
+            bool isSizeT2 = (params[2].compare("size_t") == 0 || params[2].compare("unsigned long") == 0);
+            bool isSizeT3 = (params[3].compare("size_t") == 0 || params[3].compare("unsigned long") == 0);
+            bool isSizeT4 = (params[4].compare("size_t") == 0 || params[4].compare("unsigned long") == 0);
+            bool isSizeT5 = (params[5].compare("size_t") == 0 || params[5].compare("unsigned long") == 0);
+
+            if (params[0].compare("VideoFrame") == 0 && 
+                params[1].compare("AudioFrame") == 0 &&
+                isSizeT2 && isSizeT3 && isSizeT4 && isSizeT5 &&
+                params[6].compare("int") == 0 &&
+                params[7].compare("int") == 0
+            ) {
+                types.push_back("video");
+            }
+            parameters.erase(parameters.begin(), parameters.begin() + 8);
+            goto end;
+        }
+
+        if (parameters.size() >= 4) {
+            std::string firstParamType = parameters[0].first;
+            std::string secondParamType = parameters[1].first;
+            std::string thirdParamType = parameters[2].first;
+            std::string fourthParamType = parameters[3].first;
+            bool isSizeT = (secondParamType == "size_t" || secondParamType == "unsigned long");
+            if (firstParamType.compare("AudioBuffer") && isSizeT && thirdParamType.compare("int") == 0 && fourthParamType.compare("int") == 0) {
+                types.push_back("audio");
+            }
+            parameters.erase(parameters.begin(), parameters.begin() + 3);
+            goto end;
+        }
+
         if (parameters.size() >= 3) {
             std::string firstParamType = parameters[0].first;
             std::string secondParamType = parameters[1].first;
@@ -152,7 +196,7 @@ private:
             bool isSizeT1 = (secondParamType == "size_t" || secondParamType == "unsigned long");
             bool isSizeT2 = (thirdParamType == "size_t" || thirdParamType == "unsigned long");
             if (firstParamType.find("**") != std::string::npos && isSizeT1 && isSizeT2) {
-                types.push_back("matrix");
+                types.push_back("matrix (" + extract_base_type(firstParamType) + ")");
                 if (firstParamType.find("RGBImage") != std::string::npos) {
                     types.push_back("image");
                 }
@@ -167,7 +211,7 @@ private:
             bool isSizeT = (secondParamType == "size_t" || secondParamType == "unsigned long");
 
             if (firstParamType.find('*') != std::string::npos && isSizeT) {
-                types.push_back("array");                
+                types.push_back("array (" + extract_base_type(firstParamType) + ")");                
                 if (firstParamType.find("char") != std::string::npos) {
                     types.push_back("text");
                 }
@@ -187,6 +231,16 @@ private:
             }
             return result;
         }
+    }
+
+    std::string extract_base_type(const std::string& type_str) {
+        std::regex type_regex(R"(^\s*([a-zA-Z_][a-zA-Z0-9_:]*)(\s*[\*&]*\s*)*$)");
+        std::smatch match;
+    
+        if (std::regex_match(type_str, match, type_regex)) {
+            return match[1]; // Возвращаем базовый тип
+        }
+        return ""; // Если не найдено, возвращаем пустую строку
     }
 };
 

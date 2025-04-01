@@ -240,10 +240,12 @@ public:
 
         std::string className = CE->getConstructor()->getParent()->getNameAsString();
         if (className.find("DataImage") != std::string::npos || 
+            className.find("DataAudio") != std::string::npos || 
+            className.find("DataVideo") != std::string::npos || 
             className.find("DataArray") != std::string::npos || 
             className.find("DataMatrix") != std::string::npos || 
             className.find("DataText") != std::string::npos) {
-            if (CE->getNumArgs() > 0) {
+            if (CE->getNumArgs() == 1) {
                 Expr *firstArg = CE->getArg(0)->IgnoreParenImpCasts();
                 std::string strValue = getStringValue(firstArg);
                 if (!strValue.empty()) {

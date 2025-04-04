@@ -40,15 +40,20 @@ int main(int argc, const char **argv) {
 
     if (Mode == Variables) {
         Data variables;
-        std::vector<std::string> strings;
+        std::vector<std::pair<std::string, std::string>> strings;
         bool canTest;
         Factory f(variables, strings, canTest);
         Tool.run(&f);
-        result = {
-            {"cat_test", canTest},
-            {"variables", variables},
-            {"strings", strings},
-        };
+
+        result["strings"] = json::array();
+        for (const auto& [type, filename] : strings) {
+            result["strings"].push_back({
+                {"type", type},
+                {"filename", filename}
+            });
+        }
+        result["can_test"] = canTest;
+        result["variables"] = variables;
     } else {
         FunctionData functions;
         FunctionFactory f(functions);

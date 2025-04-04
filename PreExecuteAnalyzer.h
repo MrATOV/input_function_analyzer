@@ -165,7 +165,7 @@ private:
     
 class TestVisitor : public RecursiveASTVisitor<TestVisitor> {
 public:
-    explicit TestVisitor(ASTContext &Context, SourceManager &SM, std::vector<std::string> &strings, bool& canTest)
+    explicit TestVisitor(ASTContext &Context, SourceManager &SM, std::vector<std::pair<std::string, std::string>> &strings, bool& canTest)
         : Context(Context), SM(SM), strings(strings), _canTest(canTest) {}
 
     bool shouldVisitTemplateInstantiations() const { return false; }
@@ -249,7 +249,7 @@ public:
                 Expr *firstArg = CE->getArg(0)->IgnoreParenImpCasts();
                 std::string strValue = getStringValue(firstArg);
                 if (!strValue.empty()) {
-                    strings.push_back(strValue);
+                    strings.push_back({file_type(className), strValue});
                 }
             }
         }
@@ -259,13 +259,23 @@ public:
 private:
     ASTContext &Context;
     SourceManager &SM;
-    std::vector<std::string> &strings;
+    std::vector<std::pair<std::string, std::string>> &strings;
     bool currentFunctionIsMain = false;
     bool requiredDataManagerFound = false;
     bool requiredFunctionManagerFound = false;
     bool requiredTestOptionsFound = false;
     bool requiredTestFunctionsFound = false;
     bool& _canTest;
+
+    std::string file_type(const std::string& type) {
+        if (type.find("DataImage") != std::string::npos) return "image";
+        if (type.find("DataAudio") != std::string::npos) return "audio";
+        if (type.find("DataVideo") != std::string::npos) return "video"; 
+        if (type.find("DataArray") != std::string::npos) return "array";
+        if (type.find("DataMatrix") != std::string::npos) return "matrix";
+        if (type.find("DataText") != std::string::npos) return "text";
+        return "null";
+    }
 
     bool canTest() {
         if (requiredDataManagerFound 
@@ -325,7 +335,7 @@ private:
 
 class Consumer : public ASTConsumer {
 public:
-    Consumer(ASTContext &Context, SourceManager &SM, Data &data, std::vector<std::string> &strings, bool& canTest)
+    Consumer(ASTContext &Context, SourceManager &SM, Data &data, std::vector<std::pair<std::string, std::string>> &strings, bool& canTest)
         : varVisitor(Context, SM, data), testVisitor(Context, SM, strings, canTest) {}
 
     void HandleTranslationUnit(ASTContext &Context) override {
@@ -340,27 +350,27 @@ private:
 
 class Action : public ASTFrontendAction {
 public:
-    Action(Data &data, std::vector<std::string> &strings, bool& canTest) : _data(data), _strings(strings), _canTest(canTest) {}
+    Action(Data &data, std::vector<std::pair<std::string, std::string>> &strings, bool& canTest) : _data(data), _strings(strings), _canTest(canTest) {}
 
     std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI, StringRef file) override {
         return std::make_unique<Consumer>(CI.getASTContext(), CI.getSourceManager(), _data, _strings, _canTest);
     }
 private:
     Data &_data;
-    std::vector<std::string> &_strings;
+    std::vector<std::pair<std::string, std::string>> &_strings;
     bool& _canTest;
 };
 
 class Factory : public tooling::FrontendActionFactory {
 public:
-    Factory(Data& data, std::vector<std::string>& strings, bool& canTest) : _data(data), _strings(strings), _canTest(canTest) {}
+    Factory(Data& data, std::vector<std::pair<std::string, std::string>>& strings, bool& canTest) : _data(data), _strings(strings), _canTest(canTest) {}
 
     std::unique_ptr<FrontendAction> create() override {
         return std::make_unique<Action>(_data, _strings, _canTest);
     }
 private:
     Data &_data;
-    std::vector<std::string> &_strings;
+    std::vector<std::pair<std::string, std::string>> &_strings;
     bool& _canTest;
 };
 

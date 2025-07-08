@@ -196,7 +196,7 @@ private:
             bool isSizeT1 = (secondParamType == "size_t" || secondParamType == "unsigned long");
             bool isSizeT2 = (thirdParamType == "size_t" || thirdParamType == "unsigned long");
             if (firstParamType.find("**") != std::string::npos && isSizeT1 && isSizeT2) {
-                types.push_back("matrix (" + extract_base_type(firstParamType) + ")");
+                types.push_back("matrix(" + extract_base_type(firstParamType) + ")");
                 if (firstParamType.find("RGBImage") != std::string::npos) {
                     types.push_back("image");
                 }
@@ -211,7 +211,7 @@ private:
             bool isSizeT = (secondParamType == "size_t" || secondParamType == "unsigned long");
 
             if (firstParamType.find('*') != std::string::npos && isSizeT) {
-                types.push_back("array (" + extract_base_type(firstParamType) + ")");                
+                types.push_back("array(" + extract_base_type(firstParamType) + ")");                
                 if (firstParamType.find("char") != std::string::npos) {
                     types.push_back("text");
                 }
